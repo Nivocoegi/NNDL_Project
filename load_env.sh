@@ -21,19 +21,13 @@ fi
 export MAMBA_ROOT_PREFIX="/cfs/earth/scratch/${USER}/.conda/"
 eval "$("/cfs/earth/scratch/${USER}/bin/micromamba" shell hook -s posix)"
 
-
 # ## get name of environment as specified in environment.yml
-environment_file=environment.pytorch.yml
+environment_file=/cfs/earth/scratch/${USER}/repo/environment.pytorch.yml
 env_name=$(sed -ne 's/^name: \(.*\)$/\1/p' ${environment_file:?})
 echo "################## Load (and set up) environment ${env_name:?}"
 
 # ## install env if it does not exist
 if ! micromamba env list | grep -Eq "^\s*${env_name:?} "; then
     echo "- Create conda environment ${env_name:?}"
-
-    # if [[ -z "$MPICC" ]]; then
-    #     MPICC=$(which mpicc)
-    # fi
-    # echo "MPICC: $MPICC"
     micromamba -y create -f ${environment_file:?} || { echo "Environment creation failed!"; exit 1; }
 fi

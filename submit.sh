@@ -15,6 +15,14 @@
 # shellcheck disable=SC1091
 source load_env.sh
 
+# Clone the GitHub repository
+REPO_URL="https://github.com/Nivocoegi/NNDL_Project_Repo.git"
+REPO_DIR="/cfs/earth/scratch/${USER}/cloned_NNDL_Project_Repo_from_git"
+
+if [[ ! -d ${REPO_DIR} ]]; then
+    git clone ${REPO_URL} ${REPO_DIR}
+fi
+
 hostname
 # ## get GPU info
 nvidia-smi
@@ -23,13 +31,14 @@ echo
 echo "#########################################   Tensorflow Info"
 echo
 
-micromamba run -n pytorch python pytorch_info.py
+micromamba run -n pytorch python ${REPO_DIR}/pytorch_info.py
 
 echo
 echo "#########################################   DL part"
 echo
 
-micromamba run -n pytorch python mnist.py
+# Run the Jupyter Notebook
+micromamba run -n pytorch jupyter nbconvert --to notebook --execute ${REPO_DIR}/main.ipynb --output ${REPO_DIR}/main_output.ipynb
 
 echo
 echo "#########################################   Jupyter Notebook"
