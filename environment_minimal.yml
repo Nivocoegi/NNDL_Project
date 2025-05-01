@@ -1,0 +1,20 @@
+name: NNandDL-minimal
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - numpy
+  - pandas
+  - matplotlib
+  - seaborn
+  - scikit-learn
+  - jupyterlab
+  - ipykernel
+  - notebook
+  - pytorch=2.5.1
+  - torchvision
+  - tqdm
+  - pip:
+      - tensorflow==2.12.0
