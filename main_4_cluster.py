@@ -214,12 +214,12 @@ linear_sizes = [3888, 1024, 128, 10]
 #                                      (512, 3, 'same', False), (512, 3, 'same', False), (512, 3, 'same', False),  (512, 3, 'same', True),
 #                                      (512, 3, 'same', False), (512, 3, 'same', False), (512, 3, 'same', False),  (512, 3, 'same', True)]
 #
-# linear_sizes_VGG = [4096, 1024, 128, 10]
+# linear_sizes_VGG = [4096, 1024, 128, 10]   # Layer size  of the first one might be incorrect and has to be adjusted...
 
 model = CNN_dynamic(conv_configs, linear_sizes).to(device)
 
 # Number of epochs
-num_epochs = 2
+num_epochs = 7
 
 # Optimizer
 opt_func = torch.optim.Adam
