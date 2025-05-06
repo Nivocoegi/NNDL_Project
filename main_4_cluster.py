@@ -1,13 +1,44 @@
-# ================ Imports and Data loading ===================== #
-import os
+# =========================================================== #
+# ================ File Exports and Pre Settings ===================== #
 
-# Neues Arbeitsverzeichnis festlegen
+# use small subset with number of samples per class:
+use_subset = True
+max_per_class = 10
+training_ration = 0.8 # only applied if use_subset = true
+test_set_size = 0.2 # only applied if use_subset = false
+
+# use simple model or VGG19
+use_VGG19 = False
+
+# Export Log Data (Acc, Loss, Runtime etc.) to csv
+save_model_data = False
+
+# Export Plots (Acc/Loss vs Epochs as well as Confusion Matrix and Classification Report)
+save_plot_files = False
+
+# Export of Model and Training Summary
+save_summary_txt = False
+
+# Check working directory
+import os
+print("--------- Current Workingdirectory -----------\n", os.getcwd(), '\n')
+
+# Maybe nessesary to change working directory
 os.chdir('/Users/nicolasvogel/Dokumente/16_ZHAW_MSc/V5_6_NeuralNetworks&DeepLearning/NNDL_Project_Repo')
 
-# Überprüfen, ob es geklappt hat
-print("Aktuelles Arbeitsverzeichnis:", os.getcwd())
+# hyperparameters
+epochs = 10
+learning_rate = 0.001
+batch_size = 32
 
 
+# ================ End of File Exports and Pre Settings ================= #
+# =========================================================== #
+
+
+
+
+# ================ Imports and Data loading ======================== #
 from torchvision import transforms
 from torchvision.datasets import ImageFolder
 
@@ -22,55 +53,111 @@ transform=transforms.Compose([transforms.Resize((288, 432)), transforms.ToTensor
 dataset = ImageFolder(data_dir,  transform=transform)
 
 # check output
-# print(dataset)
-
-# ================ Data preprocessing ======================= #
-from sklearn.model_selection import StratifiedShuffleSplit, StratifiedKFold
-from torch.utils.data import Subset, DataLoader
-
-#  Extracting Tags
-targets = [dataset[i][1] for i in range(len(dataset))]  # assuming (x, label)
-
-# Stratified Split: 90% Train+Val, 10% Test
-sss = StratifiedShuffleSplit(n_splits=1, test_size=0.1, random_state=42)
-for train_val_idx, test_idx in sss.split(X=targets, y=targets):
-    pass
-
-# # Debug: Testverteilung
-# test_targets = [targets[i] for i in test_idx]
-# print("Test:", Counter(test_targets))
-
-# Stratified K-Fold on Train+Val (90%)
-train_val_targets = [targets[i] for i in train_val_idx]
-skf = StratifiedKFold(n_splits=5)
-batch_size = 32
-
-for fold, (train_idx, val_idx) in enumerate(skf.split(train_val_idx, train_val_targets)):
-    # Map indices back to original dataset
-    train_indices = [train_val_idx[i] for i in train_idx]
-    val_indices = [train_val_idx[i] for i in val_idx]
-
-    train_targets = [targets[i] for i in train_indices]
-    val_targets = [targets[i] for i in val_indices]
-
-    # print(f"\nFold {fold+1}")
-    # print("Train:", Counter(train_targets))
-    # print("Validation:", Counter(val_targets))
-
-    # Erstelle Subsets und Loader
-    train_subset = Subset(dataset, train_indices)
-    val_subset = Subset(dataset, val_indices)
-    test_subset = Subset(dataset, test_idx)
-
-    train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False)
-    test_loader = DataLoader(test_subset, batch_size=batch_size, shuffle=False)
+print("--------- Data Import successfull ----------")
+print(dataset, '\n')
 
 
-# print(f"Number of training samples: {len(train_subset)}")
-# print(f"Number of validation samples: {len(val_subset)}")
-# print(f"Number of test samples: {len(test_subset)}")
+# ================ Data preprocessing - Subset ======================= #
+if use_subset:
+    from torch.utils.data import Subset, DataLoader
+    from sklearn.model_selection import train_test_split
+    import collections
 
+
+    # Load a subset of the dataset*
+    # criterion for subset, and  initialization
+    class_counts = collections.defaultdict(int)
+    max_per_class = max_per_class  # maximum number of spectrograms per genre
+    genre_indices = []
+
+    # Iterate through the dataset and select indices of spectrogram's*
+    for idx, (img, label) in enumerate(dataset):
+        if class_counts[label] < max_per_class:
+            genre_indices.append(idx)
+            class_counts[label] += 1
+        # stopping criteria if all genres contain 10 spectrogram's
+        if len(class_counts) == len(dataset.classes) and all(c >= max_per_class for c in class_counts.values()):
+            break
+
+    # created subset with the selected indices*
+    subset_data = Subset(dataset, genre_indices)
+
+    # Check Subset
+    print("--------- Subset creation successful ----------")
+    print(f"Spectrogram's in subset: {len(subset_data)}\n")
+
+    # Train Ration
+    train_ratio = training_ration
+
+    # Collect indices and labels
+    all_indices = list(range(len(subset_data)))
+    all_labels = [subset_data[i][1] for i in all_indices]  # Integer-Labels
+
+    # Stratified Split
+    train_indices, test_indices = train_test_split(
+        all_indices,
+        train_size=train_ratio,
+        stratify=all_labels,
+        random_state=42  # for reproducibility
+    )
+
+    # create subsets
+    train_subset = Subset(subset_data, train_indices)
+    test_subset = Subset(subset_data, test_indices)
+
+    # Create data loaders (load the train and validation into batches)
+    train_loader = DataLoader(train_subset, batch_size=32, shuffle=True)
+    val_loader = DataLoader(test_subset, batch_size=32, shuffle=False)
+
+    # Print the number of samples in each set
+    print("--------- Stratified Subset Data splitting successful ----------")
+    print(f"Number of training samples: {len(train_subset)}")
+    print(f"Number of testing samples: {len(test_subset)}\n")
+
+
+# ================ Data preprocessing - Whole Dataset ======================= #
+else:
+    from sklearn.model_selection import StratifiedShuffleSplit, StratifiedKFold
+    from torch.utils.data import Subset, DataLoader
+
+    #  Extracting Tags
+    targets = [dataset[i][1] for i in range(len(dataset))]  # assuming (x, label)
+
+    # Stratified Split: 90% Train+Val, 10% Test
+    sss = StratifiedShuffleSplit(n_splits=1, test_size=test_set_size, random_state=42)
+    for train_val_idx, test_idx in sss.split(X=targets, y=targets):
+        pass
+
+    # Stratified K-Fold on Train+Val (90%)
+    train_val_targets = [targets[i] for i in train_val_idx]
+    skf = StratifiedKFold(n_splits=5)
+    batch_size = batch_size
+
+    for fold, (train_idx, val_idx) in enumerate(skf.split(train_val_idx, train_val_targets)):
+        # Map indices back to original dataset
+        train_indices = [train_val_idx[i] for i in train_idx]
+        val_indices = [train_val_idx[i] for i in val_idx]
+
+        train_targets = [targets[i] for i in train_indices]
+        val_targets = [targets[i] for i in val_indices]
+
+        # print(f"\nFold {fold+1}")
+        # print("Train:", Counter(train_targets))
+        # print("Validation:", Counter(val_targets))
+
+        # Erstelle Subsets und Loader
+        train_subset = Subset(dataset, train_indices)
+        val_subset = Subset(dataset, val_indices)
+        test_subset = Subset(dataset, test_idx)
+
+        train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False)
+        test_loader = DataLoader(test_subset, batch_size=batch_size, shuffle=False)
+
+    print("--------- Stratified whole Data splitting successful ----------")
+    print(f"Number of training samples: {len(train_subset)}")
+    print(f"Number of validation samples: {len(val_subset)}")
+    print(f"Number of test samples: {len(test_subset)}\n")
 
 
 # ================ Model building ======================= #
@@ -177,30 +264,35 @@ class VGG19(nn.Module):
         return x
 
 
-# ================ Model and hyperparam initializing ======================= #
 
+# ================ Model and hyperparam initializing ======================= #
 # Device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Instantiate model
 num_classes = len(dataset.classes)
 
-# use simple model or VGG19
-use_VGG19 = False
-
 if use_VGG19:
     model = VGG19(num_classes).to(device)
 else:
     model = SimpleCNN(num_classes).to(device)
 
+print("--------- Model building successful ----------")
+print(model, '\n')
+
 # Loss and optimizer
 criterion = nn.CrossEntropyLoss()
-lr = 0.001
+lr = learning_rate
 optimizer = optim.Adam(model.parameters(), lr=lr)
 
 # Count Layers
 num_Conv_layers = str(model).count("Conv")
 num_linear_layers = str(model).count("Linear")
+
+print("--------- Model and Hyperparameter initialization successful ----------")
+print(f'Criterion: {criterion}')
+print(f'Optimizer: {optimizer}')
+print(f'Learning Rate: {lr}\n')
 
 
 # ================ Model training ======================= #
@@ -211,7 +303,11 @@ from datetime import date
 training_logs = []
 
 # Training loop
-num_epochs = 1
+num_epochs = epochs
+
+print(f"--------- Training loop started, {num_epochs} epochs  ----------")
+
+
 
 for epoch in range(num_epochs):
     start_time = time.time()
@@ -275,18 +371,17 @@ for epoch in range(num_epochs):
           f"Validation Loss: {val_loss:.4f}, Validation Acc: {val_acc:.4f} | "
           f"Time: {epoch_time:.2f}s")
 
-# # convert lr to string for filename
-# lr_str = str(lr)
-# lr_str = lr_str.split(".")
-# lr_str = lr_str[1]
+logs_df = pd.DataFrame(training_logs)
+
+print("\n--------- Training finished successful, saving files: ----------")
 
 # Optional: Convert to DataFrame and save
-save_model_data = True
 if save_model_data:
-    logs_df = pd.DataFrame(training_logs)
     filename_logs = f"{date.today().strftime('%y%m%d')}_Train-log_conv{num_Conv_layers}_lin{num_linear_layers}_ep{num_epochs}_lr{lr}.csv"
     logs_df.to_csv(filename_logs, index=True)
-    print("Training logs saved to file")
+    print(f"           - Training logs saved to file: {filename_logs}")
+
+
 
 
 # ================ Plot training process ======================= #
@@ -316,11 +411,10 @@ axes[1].grid(False)
 plt.tight_layout()
 
 # Optional: Save Plot to file
-save_plot_files = True
 if save_plot_files:
     filename_acc_loss = f"{date.today().strftime('%y%m%d')}_Acc-Loss_conv{num_Conv_layers}_lin{num_linear_layers}_ep{num_epochs}_lr{lr}.png"
     plt.savefig(filename_acc_loss, dpi=600)
-    print("Progression Plots saved to file")
+    print(f"           - Progression Plots saved to file: {filename_acc_loss}")
 plt.show()
 
 
@@ -335,6 +429,7 @@ y_true = []
 y_pred = []
 
 
+
 def save_predictions(model, test_loader):
     model.eval()
     with torch.no_grad():
@@ -345,6 +440,8 @@ def save_predictions(model, test_loader):
             y_pred.extend(predicted.cpu().numpy())
     return y_true, y_pred
 
+if use_subset:
+    test_loader = val_loader
 save_predictions(model, test_loader)
 
 # Extract labels and classification report
@@ -370,12 +467,10 @@ ax2.grid(False)
 plt.tight_layout()
 
 # Optional save plot to file
-save_plot_files = True
 if save_plot_files:
     filename_clf_cm = f"{date.today().strftime('%y%m%d')}_clf-cm_conv{num_Conv_layers}_lin{num_linear_layers}_ep{num_epochs}_lr{lr}.png"
     plt.savefig(filename_clf_cm, dpi=600)
-    print("Analytical Plots saved to file")
-
+    print(f"           - Analytical Plots saved to file: {filename_clf_cm}")
 
 plt.show()
 
@@ -417,8 +512,7 @@ filename_model_summary = f"{date.today().strftime('%y%m%d')}_Model-Summary_conv{
 
 epoch_times = logs_df['epoch_time_sec']
 
-
-save_summary_txt = True
+# Optional Export of Model and Training Summary
 if save_summary_txt:
     save_model_summary(model,
                        filepath=filename_model_summary,
@@ -429,4 +523,6 @@ if save_summary_txt:
                        device=device,
                        max_per_class=None,
                        epoch_times=epoch_times)
-    print("Model Summary saved to file")
+    print(f"           - Model Summary saved to file: {filename_model_summary}")
+
+
