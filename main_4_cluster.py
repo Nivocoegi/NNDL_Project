@@ -1,280 +1,390 @@
+# ================ Imports and Data loading ===================== #
+import os
+
+# Neues Arbeitsverzeichnis festlegen
+os.chdir('/Users/nicolasvogel/Dokumente/16_ZHAW_MSc/V5_6_NeuralNetworks&DeepLearning/NNDL_Project_Repo')
+
+# Überprüfen, ob es geklappt hat
+print("Aktuelles Arbeitsverzeichnis:", os.getcwd())
+
+
 from torchvision import transforms
 from torchvision.datasets import ImageFolder
-from torch.utils.data import random_split, DataLoader
-from torch.utils.data import Subset
-import collections
-from sklearn.model_selection import train_test_split
-import torch.nn as nn
-import torch.nn.functional as F
-import torch
-import time
-from datetime import date
-import matplotlib.pyplot as plt
 
-#==============  Data Loading and preprocessing ============== #
-# Data directory
+# choose directory of pictures
 data_dir = "./images_original"
 
 # Load full the dataset with original image size
-dataset = ImageFolder(data_dir, transform=transforms.Compose([transforms.Resize((288, 432)), # Adjust to original image size  ---------------------  WHY??
-transforms.ToTensor()]))
+# Define transformer:
+transform=transforms.Compose([transforms.Resize((288, 432)), transforms.ToTensor()])
 
-# Load the dataset with resized images
-# dataset = ImageFolder(data_dir, transform=transforms.Compose([
-#     transforms.Resize((150, 150)),
-#     transforms.ToTensor()]))
+# load data
+dataset = ImageFolder(data_dir,  transform=transform)
 
-# Load a subset of the dataset*
-# criterion for subset, and  initialization
-class_counts = collections.defaultdict(int)
-max_per_class = 99  # maximum number of spectrograms per genre -------------------------------------- define subset size HERE
-genre_indices = []
+# check output
+# print(dataset)
 
-# Iterate through the dataset and select indices of spectrogram's*
-for idx, (img, label) in enumerate(dataset):
-    if class_counts[label] < max_per_class:
-        genre_indices.append(idx)
-        class_counts[label] += 1
-    # stopping criteria if all genres contain 10 spectrogram's
-    if len(class_counts) == len(dataset.classes) and all(c >= max_per_class for c in class_counts.values()):
-        break
+# ================ Data preprocessing ======================= #
+from sklearn.model_selection import StratifiedShuffleSplit, StratifiedKFold
+from torch.utils.data import Subset, DataLoader
 
-# created subset with the selected indices*
-subset = Subset(dataset, genre_indices)
+#  Extracting Tags
+targets = [dataset[i][1] for i in range(len(dataset))]  # assuming (x, label)
 
+# Stratified Split: 90% Train+Val, 10% Test
+sss = StratifiedShuffleSplit(n_splits=1, test_size=0.1, random_state=42)
+for train_val_idx, test_idx in sss.split(X=targets, y=targets):
+    pass
 
-#==============  Train Test split for sub dataset ============== #
-# Define the split ratio
-train_ratio = 0.8
-test_ratio = 0.2
+# # Debug: Testverteilung
+# test_targets = [targets[i] for i in test_idx]
+# print("Test:", Counter(test_targets))
 
+# Stratified K-Fold on Train+Val (90%)
+train_val_targets = [targets[i] for i in train_val_idx]
+skf = StratifiedKFold(n_splits=5)
+batch_size = 32
 
+for fold, (train_idx, val_idx) in enumerate(skf.split(train_val_idx, train_val_targets)):
+    # Map indices back to original dataset
+    train_indices = [train_val_idx[i] for i in train_idx]
+    val_indices = [train_val_idx[i] for i in val_idx]
 
-# Collect indices and labels
-all_indices = list(range(len(subset)))
-all_labels = [subset[i][1] for i in all_indices]  # Integer-Labels
+    train_targets = [targets[i] for i in train_indices]
+    val_targets = [targets[i] for i in val_indices]
 
-# Stratified Split
-train_indices, test_indices = train_test_split(
-    all_indices,
-    train_size=train_ratio,
-    stratify=all_labels,
-    random_state=42  # for reproducibility
-)
+    # print(f"\nFold {fold+1}")
+    # print("Train:", Counter(train_targets))
+    # print("Validation:", Counter(val_targets))
 
-# create subsets
-train_subset = Subset(subset, train_indices)
-test_subset = Subset(subset, test_indices)
+    # Erstelle Subsets und Loader
+    train_subset = Subset(dataset, train_indices)
+    val_subset = Subset(dataset, val_indices)
+    test_subset = Subset(dataset, test_idx)
 
-# Create data loaders (load the train and validation into batches)
-train_loader = DataLoader(train_subset, batch_size=32, shuffle=True)
-test_loader = DataLoader(test_subset, batch_size=32, shuffle=False)
+    train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_subset, batch_size=batch_size, shuffle=False)
 
 
-#==============  Classification Base for Metrics ============== #
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-def accuracy(outputs, labels):
-    _, preds = torch.max(outputs, dim=1)
-    return torch.tensor(torch.sum(preds == labels).item() / len(preds))
+# print(f"Number of training samples: {len(train_subset)}")
+# print(f"Number of validation samples: {len(val_subset)}")
+# print(f"Number of test samples: {len(test_subset)}")
 
 
-class ImageClassificationBase(nn.Module):
 
-    def training_step(self, batch):
-        inputs, labels = batch
-        inputs = inputs.to(self.device)
-        labels = labels.to(self.device)
-        out = self(inputs)
-        loss = F.cross_entropy(out, labels)
-        acc = accuracy(out, labels)
-        return {'train_loss': loss, 'train_acc': acc}
+# ================ Model building ======================= #
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
 
-    def validation_step(self, batch):
-        images, labels = batch
-        out = self(images)  # Generate predictions
-        loss = F.cross_entropy(out, labels)  # Calculate loss
-        acc = accuracy(out, labels)  # Calculate accuracy
-        return {'val_loss': loss.detach(), 'val_acc': acc}
-
-    def validation_epoch_end(self, outputs):
-        batch_losses = [x['val_loss'] for x in outputs]
-        epoch_loss = torch.stack(batch_losses).mean()  # Combine losses
-        batch_accs = [x['val_acc'] for x in outputs]
-        epoch_acc = torch.stack(batch_accs).mean()  # Combine accuracies
-        return {'val_loss': epoch_loss.item(), 'val_acc': epoch_acc.item()}
-
-
-    def epoch_end(self, epoch, result):
-        print(
-            "Epoch [{}], train_loss: {:.4f}, train_acc: {:.4f}, val_loss: {:.4f}, val_acc: {:.4f}, time: {:.2f}s".format(
-                epoch, result['train_loss'], result['train_acc'], result['val_loss'], result['val_acc'],
-                result['epoch_time']))
-
-#============== Class for Dynamic model building ============== #
-class CNN_dynamic(ImageClassificationBase):
-    def __init__(self, conv_configs, linear_sizes):
-        """
-        conv_configs: list of tuples -> [(out_channels, kernel_size, padding), ...]
-        linear_sizes: list with numbers of neurons for each fc layer -> [input_size, hidden1, hidden2, ..., output_size]
-        """
-        super().__init__()
-        self.device = device or torch.device("cpu")
-        self.conv_layers = nn.ModuleList()
-        input_channels = 3  # the input pictures have only one channel
-        for output_channels, kernel_size, padding, use_pool in conv_configs:
-            self.conv_layers.append(nn.Conv2d(input_channels, output_channels, kernel_size, padding=padding))
-            self.conv_layers.append(nn.ReLU())
-            if use_pool:  # functionality to avoid pooling at the end of a layer
-                self.conv_layers.append(nn.MaxPool2d(2, 2))
-            input_channels = output_channels  # reassign the input channel to the output channels of the previous layer
-
-        self.flatten = nn.Flatten()
-
-        self.linear_layers = nn.ModuleList()
-        for i in range(len(linear_sizes) - 1):
-            self.linear_layers.append(nn.Linear(linear_sizes[i], linear_sizes[i + 1]))
-            if i < len(linear_sizes) - 2:
-                self.linear_layers.append(nn.ReLU())
-
-        self.linear_layers.append(nn.Softmax(dim=1))
+# Define a simple CNN
+class SimpleCNN(nn.Module):
+    def __init__(self, num_classes):
+        super(SimpleCNN, self).__init__()
+        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.conv3 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.conv4 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.pool2 = nn.MaxPool2d(2, 2)
+        self.fc1 = nn.Linear(64 * 18 * 27, 1024)  # adjusted to your input size (288x432 / 4)
+        self.fc2 = nn.Linear(1024, 128)
+        self.fc3 = nn.Linear(128, num_classes)
 
     def forward(self, x):
-        for layer in self.conv_layers:
-            x = layer(x)
-        x = self.flatten(x)
-        for layer in self.linear_layers:
-            x = layer(x)
+        x = self.pool(F.relu(self.conv1(x)))  # (3x288x432) -> (16x144x216)
+        x = self.pool(F.relu(self.conv2(x)))  # (16x144x216) -> (32x72x108)
+        x = self.pool2(F.relu(self.conv3(x)))  # (32x72x108) -> (64x36x54)
+        x = self.pool2(F.relu(self.conv4(x)))  # (64x36x54) -> (64x18x27)
+        x = x.view(x.size(0), -1)  # flatten
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
         return x
 
 
-#============== Function for Training loop ============== #
-@torch.no_grad()
-def evaluate(model, val_loader):
-    model.eval()
-    outputs = [model.validation_step(batch) for batch in val_loader]
-    return model.validation_epoch_end(outputs)
+
+class VGG19(nn.Module):
+    def __init__(self, num_classes):
+        super(VGG19, self).__init__()
+
+        self.features = nn.Sequential(
+            # Block 1
+            nn.Conv2d(3, 64, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),  # -> 64 x H/2 x W/2
+
+            # Block 2
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(128, 128, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),  # -> 128 x H/4 x W/4
+
+            # Block 3
+            nn.Conv2d(128, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),  # -> 256 x H/8 x W/8
+
+            # Block 4
+            nn.Conv2d(256, 512, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(512, 512, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(512, 512, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(512, 512, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),  # -> 512 x H/16 x W/16
+
+            # Block 5
+            nn.Conv2d(512, 512, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(512, 512, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(512, 512, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(512, 512, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2)  # -> 512 x H/32 x W/32
+        )
+
+        # Angepasst für Inputgröße 288x432: Output = 512 x 9 x 13
+        self.classifier = nn.Sequential(
+            nn.Linear(512 * 9 * 13, 4096),
+            nn.ReLU(inplace=True),
+            nn.Dropout(),
+            nn.Linear(4096, 4096),
+            nn.ReLU(inplace=True),
+            nn.Dropout(),
+            nn.Linear(4096, num_classes)
+        )
+
+    def forward(self, x):
+        x = self.features(x)
+        x = x.view(x.size(0), -1)
+        x = self.classifier(x)
+        return x
 
 
-def fit(epochs, lr, model, train_loader, val_loader, opt_func):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
+# ================ Model and hyperparam initializing ======================= #
 
-    history = []
-    optimizer = opt_func(model.parameters(), lr)
-    for epoch in range(epochs):
-        start_time = time.time()
+# Device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        model.train()
-        train_losses = []
-        train_accs = []
+# Instantiate model
+num_classes = len(dataset.classes)
 
-        for batch in train_loader:
-            inputs, labels = batch
-            inputs = inputs.to(device)
-            labels = labels.to(device)
+# use simple model or VGG19
+use_VGG19 = False
 
-            # Get both loss and accuracy
-            result = model.training_step((inputs, labels))
-            train_losses.append(result['train_loss'])
-            train_accs.append(result['train_acc'])
+if use_VGG19:
+    model = VGG19(num_classes).to(device)
+else:
+    model = SimpleCNN(num_classes).to(device)
 
-            # Backprop using just the loss
-            result['train_loss'].backward()
-            optimizer.step()
-            optimizer.zero_grad()
-
-        # Evaluate on validation set
-        result = evaluate(model, val_loader)
-
-        # Add average training metrics
-        result['train_loss'] = torch.stack(train_losses).mean().item()
-        result['train_acc'] = torch.stack(train_accs).mean().item()
-        result['epoch_time'] = time.time() - start_time
-
-        # Print metrics
-        model.epoch_end(epoch, result)
-
-        history.append(result)
-
-    return history
-
-
-#============== Model initialization and training ============== #
-# Instantiate the model
-# initialize conv layers (for test purposes, runtime per epoch on M1 approx. 15 seconds)
-conv_configs = [(4, 3, 'same', True), (4, 3, 'same', True),
-                            (8, 3, 'same', True), (8, 3, 'same', True)]
-linear_sizes = [3888, 1024, 128, 10]
-
-# initialize actual model
-# conv_configs_VGG = [(64, 3, 'same', False), (64, 3, 'same', True),
-#                                      (128, 3, 'same', False), (128, 3, 'same', True),
-#                                      (256, 3, 'same', False), (256, 3, 'same', False), (256, 3, 'same', False), (256, 3, 'same', True),
-#                                      (512, 3, 'same', False), (512, 3, 'same', False), (512, 3, 'same', False),  (512, 3, 'same', True),
-#                                      (512, 3, 'same', False), (512, 3, 'same', False), (512, 3, 'same', False),  (512, 3, 'same', True)]
-#
-# linear_sizes_VGG = [4096, 1024, 128, 10]   # Layer size  of the first one might be incorrect and has to be adjusted...
-
-model = CNN_dynamic(conv_configs, linear_sizes).to(device)
-
-# Number of epochs
-num_epochs = 7
-
-# Optimizer
-opt_func = torch.optim.Adam
-
-# Learning rate
+# Loss and optimizer
+criterion = nn.CrossEntropyLoss()
 lr = 0.001
+optimizer = optim.Adam(model.parameters(), lr=lr)
 
-# fitting the model on training data and record the result after each epoch
-history = fit(num_epochs, lr, model, train_loader, test_loader, opt_func) # in online article they used val_loader (validation) instead of test_loader
-
-
-
-#============== Accuracy Plot  ============== #
-num_Conv_layers = len(conv_configs)
-num_linear_layers = len(linear_sizes)
-
-def plot_accuracies(history):
-    """ Plot the history of accuracies"""
-    val_accuracies = [x['val_acc'] for x in history]
-    train_accuracies = [x['train_acc'] for x in history]
-    plt.plot(val_accuracies, '-rx')
-    plt.plot(train_accuracies, '-bx')
-    plt.legend()
-    plt.xlabel('epoch')
-    plt.ylabel('accuracy')
-    plt.title('Accuracy vs. No. of epochs');
-    filename_acc = f"{date.today()}_Accuracy_conv{num_Conv_layers}_ep{num_epochs}_max{max_per_class}.png"
-    plt.savefig(filename_acc, dpi=600)
-
-plot_accuracies(history)
-plt.clf()
+# Count Layers
+num_Conv_layers = str(model).count("Conv")
+num_linear_layers = str(model).count("Linear")
 
 
-#============== Loss Plot  ============== #
-def plot_losses(history):
-    """ Plot the losses in each epoch"""
-    train_losses = [x.get('train_loss') for x in history]
-    val_losses = [x['val_loss'] for x in history]
-    plt.plot(train_losses, '-bx')
-    plt.plot(val_losses, '-rx')
-    plt.legend()
-    plt.xlabel('epoch')
-    plt.ylabel('loss')
-    plt.legend(['Training', 'Validation'])
-    plt.title('Loss vs. No. of epochs')
-    filename_loss = f"{date.today()}_Loss_conv{num_Conv_layers}_ep{num_epochs}_max{max_per_class}.png"
-    plt.savefig(filename_loss, dpi=600)
+# ================ Model training ======================= #
+import time
+import pandas as pd
+from datetime import date
 
-plot_losses(history)
+training_logs = []
 
-#============== Modelsummary to txt file  ============== #
+# Training loop
+num_epochs = 1
+
+for epoch in range(num_epochs):
+    start_time = time.time()
+
+    # --- Training ---
+    model.train()
+    running_loss = 0.0
+    correct = 0
+    total = 0
+
+    for images, labels in train_loader:
+        images, labels = images.to(device), labels.to(device)
+
+        optimizer.zero_grad()
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+
+        running_loss += loss.item()
+        _, predicted = torch.max(outputs, 1)
+        total += labels.size(0)
+        correct += (predicted == labels).sum().item()
+
+    train_loss = running_loss
+    train_acc = correct / total
+
+    # --- Evaluation ---
+    model.eval()
+    val_loss = 0.0
+    correct = 0
+    total = 0
+
+    with torch.no_grad():
+        for images, labels in val_loader:
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+
+            val_loss += loss.item()
+            _, predicted = torch.max(outputs, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+
+    val_acc = correct / total
+    end_time = time.time()
+    epoch_time = end_time - start_time
+
+    # --- Logging ---
+    training_logs.append({
+        "epoch": epoch + 1,
+        "train_loss": train_loss,
+        "train_accuracy": train_acc,
+        "val_loss": val_loss,
+        "val_accuracy": val_acc,
+        "epoch_time_sec": epoch_time
+    })
+
+    print(f"Epoch [{epoch+1}/{num_epochs}] "
+          f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f} | "
+          f"Validation Loss: {val_loss:.4f}, Validation Acc: {val_acc:.4f} | "
+          f"Time: {epoch_time:.2f}s")
+
+# # convert lr to string for filename
+# lr_str = str(lr)
+# lr_str = lr_str.split(".")
+# lr_str = lr_str[1]
+
+# Optional: Convert to DataFrame and save
+save_model_data = True
+if save_model_data:
+    logs_df = pd.DataFrame(training_logs)
+    filename_logs = f"{date.today().strftime('%y%m%d')}_Train-log_conv{num_Conv_layers}_lin{num_linear_layers}_ep{num_epochs}_lr{lr}.csv"
+    logs_df.to_csv(filename_logs, index=True)
+    print("Training logs saved to file")
+
+
+# ================ Plot training process ======================= #
+import matplotlib.pyplot as plt
+
+# initi plot
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+# --- Accuracy subplot ---
+axes[0].plot(logs_df["epoch"], logs_df["train_accuracy"], label="Train Accuracy", marker='o')
+axes[0].plot(logs_df["epoch"], logs_df["val_accuracy"], label="Validation Accuracy", marker='x')
+axes[0].set_title("Accuracy over Epochs")
+axes[0].set_xlabel("Epoch")
+axes[0].set_ylabel("Accuracy")
+axes[0].legend()
+axes[0].grid(False)
+
+# --- Loss subplot ---
+axes[1].plot(logs_df["epoch"], logs_df["train_loss"], label="Train Loss", marker='o')
+axes[1].plot(logs_df["epoch"], logs_df["val_loss"], label="Validation Loss", marker='x')
+axes[1].set_title("Loss over Epochs")
+axes[1].set_xlabel("Epoch")
+axes[1].set_ylabel("Loss")
+axes[1].legend()
+axes[1].grid(False)
+
+plt.tight_layout()
+
+# Optional: Save Plot to file
+save_plot_files = True
+if save_plot_files:
+    filename_acc_loss = f"{date.today().strftime('%y%m%d')}_Acc-Loss_conv{num_Conv_layers}_lin{num_linear_layers}_ep{num_epochs}_lr{lr}.png"
+    plt.savefig(filename_acc_loss, dpi=600)
+    print("Progression Plots saved to file")
+plt.show()
+
+
+# ================ Plot clf & cm of test data set ======================= #
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay
+import pandas as pd
+
+# Save predictions
+y_true = []
+y_pred = []
+
+
+def save_predictions(model, test_loader):
+    model.eval()
+    with torch.no_grad():
+        for inputs, labels in test_loader:
+            outputs = model(inputs)
+            _, predicted = torch.max(outputs, 1)
+            y_true.extend(labels.cpu().numpy())
+            y_pred.extend(predicted.cpu().numpy())
+    return y_true, y_pred
+
+save_predictions(model, test_loader)
+
+# Extract labels and classification report
+label_idx = [dataset.class_to_idx[i] for i in dataset.classes]
+clf_report = classification_report(y_true, y_pred, labels=label_idx, target_names=dataset.classes, output_dict=True)
+
+# Compute confusion matrix
+cm = confusion_matrix(y_true, y_pred, labels=label_idx)
+
+# Create subplots
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+
+# Classification Report Heatmap
+sns.heatmap(pd.DataFrame(clf_report).iloc[:-1, :].T, annot=True, ax=ax1)
+ax1.set_title('Classification Report')
+
+# Confusion Matrix
+disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=dataset.classes)
+disp.plot(ax=ax2, colorbar=False)  # Avoid duplicate colorbars
+ax2.set_title('Confusion Matrix (Test set)')
+ax2.grid(False)
+
+plt.tight_layout()
+
+# Optional save plot to file
+save_plot_files = True
+if save_plot_files:
+    filename_clf_cm = f"{date.today().strftime('%y%m%d')}_clf-cm_conv{num_Conv_layers}_lin{num_linear_layers}_ep{num_epochs}_lr{lr}.png"
+    plt.savefig(filename_clf_cm, dpi=600)
+    print("Analytical Plots saved to file")
+
+
+plt.show()
+
+
+# ================ Save Model summary to text file ======================= #
 def save_model_summary(model, filepath="model_summary.txt", epochs=None, lr=None, optimizer=None, batch_size=None,
-                       device=None, max_per_class=None, epochs_times=None):
+                       device=None, max_per_class=None, epoch_times=None):
     with open(filepath, "w") as f:
-        f.write("Model Architecture:\n")
+        f.write("--- Model Architecture ---\n")
         f.write(str(model))
         f.write("\n\n--- Hyperparameters ---\n")
         if epochs is not None:
@@ -294,6 +404,7 @@ def save_model_summary(model, filepath="model_summary.txt", epochs=None, lr=None
             total_time = sum(epoch_times)
             f.write(f"\n--- Runtime ---\n")
             f.write(f"Total training time: {total_time:.2f} seconds\n")
+            f.write(f"Mean training time: {total_time / num_epochs:.2f} seconds/epoch\n")
 
         f.write("\n--- Parameters ---\n")
         total_params = sum(p.numel() for p in model.parameters())
@@ -302,20 +413,20 @@ def save_model_summary(model, filepath="model_summary.txt", epochs=None, lr=None
         f.write(f"Trainable parameters: {trainable_params}\n")
 
 
-filename_model_summary = f"{date.today()}_Model-Summary_conv{num_Conv_layers}_ep{num_epochs}_max{max_per_class}.txt"
-epoch_times = [entry['epoch_time'] for entry in history]
-optimizer = opt_func
+filename_model_summary = f"{date.today().strftime('%y%m%d')}_Model-Summary_conv{num_Conv_layers}_lin{num_linear_layers}_ep{num_epochs}_lr{lr}.txt"
 
-save_model_summary(model,
-                   filepath=filename_model_summary,
-                   epochs=10,
-                   lr=0.001,
-                   optimizer=optimizer,
-                   batch_size=32,
-                   device=device,
-                   max_per_class=max_per_class,
-                   epochs_times=epoch_times)
+epoch_times = logs_df['epoch_time_sec']
 
 
-
-
+save_summary_txt = True
+if save_summary_txt:
+    save_model_summary(model,
+                       filepath=filename_model_summary,
+                       epochs=num_epochs,
+                       lr=lr,
+                       optimizer=optimizer,
+                       batch_size=batch_size,
+                       device=device,
+                       max_per_class=None,
+                       epoch_times=epoch_times)
+    print("Model Summary saved to file")
